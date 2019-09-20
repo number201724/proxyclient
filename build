@@ -1,0 +1,1 @@
+g++ -o proxyclient -I../raknet ../raknet/*.o *.cpp -lpthread -lcrypto
