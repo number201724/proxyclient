@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <list>
+#include <queue>
 #include <unordered_map>
 #include "protocol.h"
 #include <unistd.h>
@@ -43,3 +44,4 @@ typedef int sock_t;
 #include "RakSleep.h"
 #include "PacketLogger.h"
 #include "SignaledEvent.h"
+#include "protocol.h"

@@ -1,7 +1,7 @@
 #pragma once
 
 
-#define FRAGMENT_LEN 65535
+#define FRAGMENT_LEN 1024
 
 
 class ringbuffer

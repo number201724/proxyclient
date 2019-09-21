@@ -6,14 +6,42 @@
 extern RakNet::RakPeerInterface *rakPeer;
 
 extern Tunnel tunnel;
+
+packet::packet(void *_data, size_t _len)
+{
+    len = _len;
+    data = malloc(_len);
+    memcpy(data, _data, len);
+}
+
+packet::~packet()
+{
+    if (data)
+    {
+        free(data);
+    }
+}
+
 socks5_client::socks5_client(sock_t fd)
 {
     sock = fd;
     guid = rakPeer->Get64BitUniqueRandomNumber();
+    event.InitEvent();
 }
 
 socks5_client::~socks5_client()
 {
+    event.CloseEvent();
+}
+
+void socks5_client::lock()
+{
+    _lock.lock();
+}
+
+void socks5_client::unlock()
+{
+    _lock.unlock();
 }
 
 socks5_server::socks5_server()
@@ -35,7 +63,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
     client->stage = SOCKS5_CONN_STAGE_EXMETHOD;
 
     timeout.tv_sec = 0;
-    timeout.tv_usec = 50 * 1000;
+    timeout.tv_usec = 0;
     while (true)
     {
         FD_ZERO(&readfds);
@@ -44,12 +72,12 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
 
         FD_SET(client->sock, &readfds);
 
-        client->lock.lock();
+        client->lock();
         if (!client->outgoing_buffers.empty())
         {
             FD_SET(client->sock, &writefds);
         }
-        client->lock.unlock();
+        client->unlock();
 
         FD_SET(client->sock, &exceptfds);
 
@@ -65,14 +93,26 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
 
         if (FD_ISSET(client->sock, &writefds))
         {
-            client->lock.lock();
-            len = std::min(client->outgoing_buffers.size(), sizeof(buf));
-            client->outgoing_buffers.deque(buf, len);
-            client->lock.unlock();
+            packet *sendpacket = nullptr;
 
-            len = send(client->sock, buf, len, 0);
+            client->lock();
 
-            printf("send packets\n");
+            if (!client->outgoing_buffers.empty())
+            {
+                sendpacket = client->outgoing_buffers.front();
+                client->outgoing_buffers.pop();
+            }
+
+            client->unlock();
+
+            if (sendpacket)
+            {
+                len = send(client->sock, sendpacket->data, sendpacket->len, 0);
+
+                delete sendpacket;
+            }
+
+            // printf("send packets\n");
         }
 
         if (FD_ISSET(client->sock, &readfds))
@@ -82,6 +122,13 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
             {
                 break;
             }
+
+            if (client->stage == SOCKS5_CONN_STAGE_STREAM)
+            {
+                tunnel.send_stream(client, buf, len);
+                continue;
+            }
+
             if (!client->incoming_buffers.queue(buf, len))
             {
                 printf("incoming_buffers overflow\n");
@@ -89,6 +136,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
             }
 
         readnext:
+
             if (client->stage == SOCKS5_CONN_STAGE_EXMETHOD)
             {
                 if (client->incoming_buffers.size() < sizeof(struct socks5_method_req))
@@ -104,7 +152,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
 
                 if (method.ver != SOCKS5_VERSION)
                 {
-                    printf("invalid socks5 version: [%d]\n", method.ver);
+                    printf("invalid socks5 version: SOCKS5_CONN_STAGE_EXMETHOD [%d]\n", method.ver);
                     break;
                 }
 
@@ -161,7 +209,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
 
                 if (request.ver != SOCKS5_VERSION)
                 {
-                    printf("invalid socks5 version: [%d]\n", request.ver);
+                    printf("invalid socks5 version: SOCKS5_CONN_STAGE_EXHOST [%d]\n", request.ver);
                     break;
                 }
 
@@ -257,17 +305,16 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
                     //check if connect successfully
                     if (client->stage == SOCKS5_CONN_STAGE_CONNECTING || client->stage == SOCKS5_CONN_STAGE_CONNECTED)
                     {
-                        printf("waitting connecting......\n");
                         client->event.WaitOnEvent(5000);
-
-                        printf("waitting connecting...... done\n");
                         struct socks5_response *reply = (struct socks5_response *)buf;
                         reply->ver = SOCKS5_VERSION;
                         reply->rep = client->resp_status;
                         reply->rsv = 0;
-                        reply->addrtype = client->remote_addrtype;
+                        reply->addrtype = client->bnd_addrtype;
 
                         len = sizeof(struct socks5_response);
+
+                        printf("reply->addrtype:%d\n", reply->addrtype);
 
                         if (reply->addrtype == SOCKS5_ADDRTYPE_IPV4)
                         {
@@ -316,13 +363,16 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
 
                 goto readnext;
             }
-        }
 
-        if (client->stage == SOCKS5_CONN_STAGE_STREAM)
-        {
-            if(!client->incoming_buffers.empty())
+            if (client->stage == SOCKS5_CONN_STAGE_STREAM)
             {
-                tunnel.send_stream(client);
+                if (!client->incoming_buffers.empty())
+                {
+                    unsigned char tempbuf[FRAGMENT_LEN];
+                    len = (int)client->incoming_buffers.size();
+                    client->incoming_buffers.deque(tempbuf, client->incoming_buffers.size());
+                    tunnel.send_stream(client, tempbuf, len);
+                }
             }
         }
     }

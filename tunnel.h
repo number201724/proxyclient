@@ -18,6 +18,7 @@ public:
 
     void on_frame();
     void handle_packet(RakNet::Packet *p);
+    void connection_packet(void *data, size_t length);
     
     void setup(const char *proxy_server_host, uint16_t proxy_server_port, const char *key);
 
@@ -37,8 +38,8 @@ public:
      **/
     void request_connect(std::shared_ptr<socks5_client> &client);
 
-    void send(std::shared_ptr<socks5_client> &client, RakNet::BitStream &packet);
-    void send_stream(std::shared_ptr<socks5_client> &client);
+    void send(std::shared_ptr<socks5_client> &client, RakNet::BitStream &packet, PacketReliability reliability = RELIABLE_ORDERED, PacketPriority priority = MEDIUM_PRIORITY);
+    void send_stream(std::shared_ptr<socks5_client> &client, void *data, size_t len);
 
     int _stage;
     std::mutex _lock;

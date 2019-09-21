@@ -50,8 +50,6 @@ size_t GetPacketLength(RakNet::Packet *p)
         return p->length;
 }
 
-#define ID_C2S_TCP_CONNECT (ID_USER_PACKET_ENUM + 0)
-
 int main(int argc, char *argv[])
 {
     rakPeer = RakNet::RakPeerInterface::GetInstance();
