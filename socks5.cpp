@@ -63,7 +63,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
     client->stage = SOCKS5_CONN_STAGE_EXMETHOD;
 
     timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
+    timeout.tv_usec = 50 * 1000;
     while (true)
     {
         FD_ZERO(&readfds);
@@ -298,7 +298,7 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
                     }
                     else
                     {
-                        printf("SOCKS5_ADDRTYPE_UNKNOWN\n");
+                        //printf("SOCKS5_ADDRTYPE_UNKNOWN\n");
                         break;
                     }
 
@@ -313,8 +313,6 @@ void socks5_server::tcp_client_proc(std::shared_ptr<socks5_client> client)
                         reply->addrtype = client->bnd_addrtype;
 
                         len = sizeof(struct socks5_response);
-
-                        printf("reply->addrtype:%d\n", reply->addrtype);
 
                         if (reply->addrtype == SOCKS5_ADDRTYPE_IPV4)
                         {
@@ -393,7 +391,6 @@ void socks5_server::accept_thrd_proc()
         sock = accept(_tcp_fd, nullptr, 0);
         if (sock <= 0)
         {
-            printf("accept failed\n");
             exit(EXIT_FAILURE);
         }
 

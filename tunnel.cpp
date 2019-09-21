@@ -53,8 +53,6 @@ void Tunnel::connection_packet(void *data, size_t length)
     uint8_t nonce[8];
     RakNet::BitStream reader((unsigned char *)data, (const unsigned int)length, false);
 
-    printf("connection_packet\n");
-
     reader.IgnoreBytes(sizeof(unsigned char));
     if (!reader.Read(nonce))
         return;
@@ -72,7 +70,6 @@ void Tunnel::connection_packet(void *data, size_t length)
         return;
     }
 
-    printf("identifier:%d\n", identifier);
     _lock.lock();
 
     auto iterator = _socks5_clientmap.find(guid);
@@ -92,8 +89,6 @@ void Tunnel::connection_packet(void *data, size_t length)
 
         if (reader.Read(client->resp_status) && reader.Read(client->bnd_addrtype))
         {
-            printf("client->resp_status:%d\n", client->resp_status);
-            printf("client->bnd_addrtype:%d\n", client->bnd_addrtype);
 
             switch (client->bnd_addrtype)
             {
@@ -140,11 +135,16 @@ void Tunnel::connection_packet(void *data, size_t length)
         encrypted_length = BITS_TO_BYTES(reader.GetNumberOfUnreadBits());
 
         client->lock();
-
         client->outgoing_buffers.push(new packet(encrypted_data,encrypted_length ));
         client->unlock();
+    }
 
+    if (identifier == ID_A2A_TCP_CLOSE)
+    {
+        client->lock();
+        shutdown(client->sock,SHUT_RDWR);
         client->event.SetEvent();
+        printf("shutdown\n");
     }
 }
 

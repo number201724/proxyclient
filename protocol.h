@@ -102,5 +102,6 @@ struct socks5_userpass_res
 #define ID_C2S_TCP_CONNECT 0x01
 #define ID_S2C_TCP_CONNECT 0x02
 #define ID_A2A_TCP_STREAM  0x03
+#define ID_A2A_TCP_CLOSE  0x04
 
 #endif
