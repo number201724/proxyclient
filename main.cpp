@@ -11,6 +11,14 @@ Tunnel tunnel;
 #define HOST "127.0.0.1"
 #define PORT 27015
 
+uv_timer_t debugtimer;
+int alloc_cnt =0;
+
+static void ontimer(uv_timer_t *timer)
+{
+    printf("tcp usecount:%lu  allocnt:%d\n", tunnel._socks5_clientmap.size(),alloc_cnt);
+}
+
 // Copied from Multiplayer.cpp
 // If the first byte is ID_TIMESTAMP, then we want the 5th byte
 // Otherwise we want the 1st byte
@@ -49,9 +57,22 @@ size_t GetPacketLength(RakNet::Packet *p)
     else
         return p->length;
 }
+uv_timer_t udp_timer;
 
+static void udp_packet_update(uv_timer_t *timer)
+{
+    RakNet::Packet *p;
+
+    for (p = rakPeer->Receive(); p; rakPeer->DeallocatePacket(p), p = rakPeer->Receive())
+    {
+        tunnel.handle_packet(p);
+    }
+
+    tunnel.on_frame();
+}
 int main(int argc, char *argv[])
 {
+    signal(SIGPIPE, SIG_IGN);
     rakPeer = RakNet::RakPeerInterface::GetInstance();
     rakPeer->SetTimeoutTime(10000, RakNet::UNASSIGNED_SYSTEM_ADDRESS);
     rakPeer->AllowConnectionResponseIPMigration(false);
@@ -67,27 +88,14 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    tunnel.setup("127.0.0.1", 27015, "WDNMDNMSL");
+    tunnel.setup("47.56.166.112", 27015, "WDNMDNMSL");
 
-    if (!socks5.start("0.0.0.0", 1080))
-    {
-        printf("socks5 server start failed\n");
-        exit(EXIT_FAILURE);
-    }
+    socks5.start("0.0.0.0", 1080);
+    uv_timer_init(uv_default_loop(), &debugtimer);
+    uv_timer_start(&debugtimer, ontimer, 5000, 5000);
+    uv_timer_init(uv_default_loop(), &udp_timer);
+    uv_timer_start(&udp_timer, udp_packet_update, 10, 10);
 
-    while (true)
-    {
-        RakNet::Packet *p;
-
-        for (p = rakPeer->Receive(); p; rakPeer->DeallocatePacket(p), p = rakPeer->Receive())
-        {
-            tunnel.handle_packet(p);
-        }
-
-        tunnel.on_frame();
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    }
-
+    uv_run(uv_default_loop(), UV_RUN_DEFAULT);
     return 0;
 }
