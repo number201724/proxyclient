@@ -1,1 +1,1 @@
-g++ -g -o proxyclient -I../raknet ../raknet/*.o *.cpp -lpthread -lcrypto -luv
+g++ -g -o proxyclient -Iraknet raknet/*.cpp *.cpp -lpthread -lcrypto -luv

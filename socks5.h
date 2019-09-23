@@ -30,7 +30,7 @@ public:
         return refcnt;
     }
 
-private:
+public:
     int64_t _refcnt;
 };
 
@@ -84,12 +84,12 @@ public:
     socks5_addr bnd_addr;
     unsigned char remote_addrtype;
     socks5_addr remote_addr;
-    int64_t sequence;
     socks5_tcp_reader *reader;
     socks5_tcp_close *close;
     socks5_tcp_shutdown *shutdown;
     socks5_tcp_timeout *timeout;
     uv_tcp_t sock;
+    bool remote_close;
 
     static void connect_event(socks5_client *client);
 };
@@ -118,7 +118,6 @@ class socks5_tcp_connect_timeout : public socks5_tcp_timeout
 public:
     socks5_tcp_connect_timeout(socks5_client *_client, int timeout, int repeat) : socks5_tcp_timeout(_client, timeout, repeat)
     {
-        
     }
     virtual void callback();
 };
@@ -126,6 +125,8 @@ public:
 class socks5_tcp_close
 {
 public:
+    socks5_tcp_close(socks5_client *_client);
+    ~socks5_tcp_close();
     static void close_cb(uv_handle_t *handle);
     static void close(socks5_client *client);
     socks5_client *client;
@@ -134,6 +135,8 @@ public:
 class socks5_tcp_shutdown
 {
 public:
+    socks5_tcp_shutdown(socks5_client *_client);
+    ~socks5_tcp_shutdown();
     static void shutdown_cb(uv_shutdown_t *req, int status);
     static void shutdown(socks5_client *client);
 

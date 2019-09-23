@@ -11,14 +11,6 @@ Tunnel tunnel;
 #define HOST "127.0.0.1"
 #define PORT 27015
 
-uv_timer_t debugtimer;
-int alloc_cnt =0;
-
-static void ontimer(uv_timer_t *timer)
-{
-    printf("tcp usecount:%lu  allocnt:%d\n", tunnel._socks5_clientmap.size(),alloc_cnt);
-}
-
 // Copied from Multiplayer.cpp
 // If the first byte is ID_TIMESTAMP, then we want the 5th byte
 // Otherwise we want the 1st byte
@@ -57,8 +49,8 @@ size_t GetPacketLength(RakNet::Packet *p)
     else
         return p->length;
 }
-uv_timer_t udp_timer;
 
+uv_timer_t udp_timer;
 static void udp_packet_update(uv_timer_t *timer)
 {
     RakNet::Packet *p;
@@ -70,6 +62,7 @@ static void udp_packet_update(uv_timer_t *timer)
 
     tunnel.on_frame();
 }
+
 int main(int argc, char *argv[])
 {
     signal(SIGPIPE, SIG_IGN);
@@ -88,11 +81,8 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    tunnel.setup("47.56.166.112", 27015, "WDNMDNMSL");
-
+    tunnel.setup("127.0.0.1", 27015, "WDNMDNMSL");
     socks5.start("0.0.0.0", 1080);
-    uv_timer_init(uv_default_loop(), &debugtimer);
-    uv_timer_start(&debugtimer, ontimer, 5000, 5000);
     uv_timer_init(uv_default_loop(), &udp_timer);
     uv_timer_start(&udp_timer, udp_packet_update, 10, 10);
 

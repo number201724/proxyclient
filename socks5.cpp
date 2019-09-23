@@ -6,7 +6,6 @@
 extern RakNet::RakPeerInterface *rakPeer;
 
 extern Tunnel tunnel;
-extern int alloc_cnt;
 
 packet::packet(void *_data, size_t _len)
 {
@@ -23,60 +22,82 @@ packet::~packet()
     }
 }
 
+socks5_tcp_close::socks5_tcp_close(socks5_client *_client) : client(_client)
+{
+    client->addref();
+}
+
+socks5_tcp_close::~socks5_tcp_close()
+{
+    client->release();
+}
+
 void socks5_tcp_close::close_cb(uv_handle_t *handle)
 {
     socks5_client *client = (socks5_client *)handle->data;
-    delete client->close;
+
+    if(client->reader)
+    {
+        delete client->reader;
+        client->reader = nullptr;
+    }
+
+    socks5_tcp_close *close = client->close;
     client->close = nullptr;
-    client->stage = SOCKS5_CONN_STAGE_CLOSED;
-    client->release();
+    delete close;
 }
 
 void socks5_tcp_close::close(socks5_client *client)
 {
-    if (client->stage != SOCKS5_CONN_STAGE_CLOSED)
+    if (client->stage < SOCKS5_CONN_STAGE_CLOSED)
     {
-        client->addref();
+        if (!client->remote_close)
+        {
+            tunnel.send_close(client);
+        }
 
         if (client->reader)
         {
             uv_read_stop((uv_stream_t *)&client->sock);
-            delete client->reader;
-            client->reader = nullptr;
         }
 
         client->stage = SOCKS5_CONN_STAGE_CLOSED;
-        client->close = new socks5_tcp_close();
-        client->close->client = client;
-
+        client->close = new socks5_tcp_close(client);
         uv_close((uv_handle_t *)&client->sock, close_cb);
-        tunnel.send_close(client);
+
         tunnel.unlink_client(client);
     }
+}
+
+socks5_tcp_shutdown::socks5_tcp_shutdown(socks5_client *_client) : client(_client)
+{
+    client->addref();
+}
+
+socks5_tcp_shutdown::~socks5_tcp_shutdown()
+{
+    client->release();
 }
 void socks5_tcp_shutdown::shutdown_cb(uv_shutdown_t *req, int status)
 {
     socks5_tcp_shutdown *pshutdown = (socks5_tcp_shutdown *)req->data;
     socks5_client *client = pshutdown->client;
-    delete pshutdown;
     socks5_tcp_close::close(client);
+    delete pshutdown;
 }
 
 void socks5_tcp_shutdown::shutdown(socks5_client *client)
 {
     if (client->stage < SOCKS5_CONN_STAGE_CLOSING)
     {
-        client->addref();
         client->stage = SOCKS5_CONN_STAGE_CLOSING;
-        socks5_tcp_shutdown *pshutdown = new socks5_tcp_shutdown();
+        socks5_tcp_shutdown *pshutdown = new socks5_tcp_shutdown(client);
         pshutdown->req.data = pshutdown;
-        pshutdown->client = client;
         int code = uv_shutdown(&pshutdown->req, (uv_stream_t *)&client->sock, shutdown_cb);
         if (code)
         {
-            client->release();
-            delete pshutdown;
             socks5_tcp_close::close(client);
+            delete pshutdown;
         }
     }
 }
@@ -85,7 +106,6 @@ socks5_tcp_sender::socks5_tcp_sender(socks5_client *_client, void *data, size_t 
 {
     if (len == 0)
     {
-        printf("sender == 0\n");
         exit(EXIT_FAILURE);
     }
     buf.base = new char[len];
@@ -108,7 +128,6 @@ socks5_tcp_sender::~socks5_tcp_sender()
 void socks5_tcp_sender::write_cb(uv_write_t *req, int status)
 {
     socks5_tcp_sender *request = (socks5_tcp_sender *)req->data;
-
     delete request;
 }
 
@@ -116,11 +135,15 @@ void socks5_tcp_sender::write(socks5_client *_client, void *data, size_t len)
 {
     if (_client->stage < SOCKS5_CONN_STAGE_CLOSING)
     {
+        if (len == 0)
+        {
+            _client->remote_close = true;
+            socks5_tcp_shutdown::shutdown(_client);
+            return;
+        }
+
         socks5_tcp_sender *sender = new socks5_tcp_sender(_client, data, len);
         sender->request.data = sender;
-
-        printf("%lu  stage:%d\n", _client->guid, _client->stage);
-
         int code = uv_write(&sender->request, (uv_stream_t *)&_client->sock, &sender->buf, 1, write_cb);
         if (code != 0)
         {
@@ -200,21 +223,23 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
                                 const uv_buf_t *buf)
 {
     unsigned char message[1024];
-    // printf("socks5_tcp_reader::read_cb\n");
     socks5_client *client = (socks5_client *)stream->data;
     socks5_tcp_reader *reader = client->reader;
 
-    if (nread == UV_EOF)
+    if (nread == UV_EOF || nread == UV_ECANCELED)
     {
-        printf("%lu UV_EOF\n", client->guid);
+        client->reader = nullptr;
         socks5_tcp_close::close(client);
+        delete reader;
+
         return;
     }
 
     if (nread < 0)
     {
-        printf("%lu nread == 0\n", client->guid);
+        client->reader = nullptr;
         socks5_tcp_close::close(client);
+        delete reader;
         return;
     }
 
@@ -226,8 +251,9 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
 
     if (!client->incoming_buffers.queue(buf->base, nread))
     {
-        printf("incoming_buffers overflow\n");
+        client->reader = nullptr;
         socks5_tcp_close::close(client);
+        delete reader;
         return;
     }
 
@@ -249,7 +275,9 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
             if (method.ver != SOCKS5_VERSION)
             {
                 printf("invalid socks5 version: SOCKS5_CONN_STAGE_EXMETHOD [%d]\n", method.ver);
+                client->reader = nullptr;
                 socks5_tcp_close::close(client);
+                delete reader;
                 return;
             }
 
@@ -305,7 +333,9 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
             if (request.ver != SOCKS5_VERSION)
             {
                 printf("invalid socks5 version: SOCKS5_CONN_STAGE_EXHOST [%d]\n", request.ver);
+                client->reader = nullptr;
                 socks5_tcp_close::close(client);
+                delete reader;
                 return;
             }
 
@@ -332,10 +362,10 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
                     client->bnd_addr = client->remote_addr;
                     client->stage = SOCKS5_CONN_STAGE_CONNECTING;
 
-                    printf("connecting ipv4.\n");
 
                     tunnel.link_client(client);
                     tunnel.request_connect(client);
+
                 }
                 else if (request.addrtype == SOCKS5_ADDRTYPE_IPV6)
                 {
@@ -355,8 +385,6 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
                     client->bnd_addrtype = client->remote_addrtype;
                     client->bnd_addr = client->remote_addr;
                     client->stage = SOCKS5_CONN_STAGE_CONNECTING;
-
-                    printf("connecting ipv6.\n");
 
                     tunnel.link_client(client);
                     tunnel.request_connect(client);
@@ -393,15 +421,14 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
                     client->bnd_addr = client->remote_addr;
                     client->stage = SOCKS5_CONN_STAGE_CONNECTING;
 
-                    printf("connecting domain:%s.\n", client->remote_addr.domain.domain);
-
                     tunnel.link_client(client);
                     tunnel.request_connect(client);
                 }
                 else
                 {
+                    client->reader = nullptr;
                     socks5_tcp_close::close(client);
-                    //printf("SOCKS5_ADDRTYPE_UNKNOWN\n");
+                    delete reader;
                     return;
                 }
 
@@ -443,19 +470,16 @@ void socks5_tcp_reader::read_cb(uv_stream_t *stream,
 
 socks5_client::socks5_client()
 {
+    remote_close = false;
     guid = rakPeer->Get64BitUniqueRandomNumber();
     reader = nullptr;
     close = nullptr;
     shutdown = nullptr;
     timeout = nullptr;
-    sequence = 0;
-    alloc_cnt++;
 }
 
 socks5_client::~socks5_client()
 {
-    printf("socks5_client::~socks5_client\n");
-    alloc_cnt--;
 }
 
 void socks5_client::connect_event(socks5_client *client)
@@ -493,11 +517,6 @@ void socks5_client::connect_event(socks5_client *client)
         len += sizeof(char) + message[4];
     }
 
-    if (client->remote_addrtype == SOCKS5_ADDRTYPE_DOMAIN)
-    {
-        printf("connect domain:%s resp:%d  bndaddrtype:%d\n", client->remote_addr.domain.domain, client->resp_status, client->bnd_addrtype);
-    }
-
     socks5_tcp_sender::write(client, reply, len);
 
     if (client->stage != SOCKS5_CONN_STAGE_CONNECTED)
@@ -510,7 +529,6 @@ void socks5_client::connect_event(socks5_client *client)
 
     if (!client->incoming_buffers.empty())
     {
-        printf("client->incoming_buffers.size():%lu\n", client->incoming_buffers.size());
         unsigned char tempbuf[FRAGMENT_LEN];
         int len = (int)client->incoming_buffers.size();
         client->incoming_buffers.deque(tempbuf, client->incoming_buffers.size());
@@ -529,17 +547,17 @@ socks5_server::~socks5_server()
 void socks5_server::connection_cb(uv_stream_t *server, int status)
 {
     int code;
+    if (status == UV_ECANCELED)
+    {
+        return;
+    }
+
     socks5_client *client = new socks5_client();
 
     if (client == nullptr)
     {
         printf("new socks5_client failed\n");
         exit(EXIT_FAILURE);
-    }
-
-    if (status == UV_ECANCELED)
-    {
-        return;
     }
 
     if (status != 0)

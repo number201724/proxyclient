@@ -109,34 +109,26 @@ void Tunnel::connection_packet(void *data, size_t length)
 {
     unsigned char identifier;
     uint64_t guid;
-    uint8_t nonce[8];
-    RakNet::BitStream reader((unsigned char *)data, (const unsigned int)length, false);
 
-    reader.IgnoreBytes(sizeof(unsigned char));
-    if (!reader.Read((char *)nonce,8))
-        return;
+    struct packet_header *header = (struct packet_header *)data;
 
-    dump_bytes(nonce,8);
-    unsigned char *encrypted_data = reader.GetData() + BITS_TO_BYTES(reader.GetReadOffset());
-    size_t encrypted_length = BITS_TO_BYTES(reader.GetNumberOfUnreadBits());
+    unsigned char *encrypted_data = (unsigned char *)&header[1];
+    size_t encrypted_length = length - sizeof(struct packet_header);
+    uint32_t ncrc = crc32(0, encrypted_data, encrypted_length);
+    RakNet::BitStream reader(encrypted_data, encrypted_length, false);
 
-    s20_crypt(password, S20_KEYLEN_256, nonce, 0, encrypted_data, encrypted_length);
+    s20_crypt(password, S20_KEYLEN_256, header->nonce, 0, encrypted_data, encrypted_length);
 
-    if (!reader.Read(identifier))
-        {
-            printf("cant read id\n");
-            return;
-        }
+    struct stream_header *sheader = (struct stream_header *)&header[1];
 
-    if (!reader.Read(guid))
-    { printf("cant read guid\n");
-        return;
-    }
+    identifier = sheader->id;
+    guid = sheader->guid;
+
+    reader.IgnoreBytes(9);
 
     auto iterator = _socks5_clientmap.find(guid);
     if (iterator == _socks5_clientmap.end())
     {
-        printf("cant find client guid\n");
         return;
     }
 
@@ -144,20 +136,20 @@ void Tunnel::connection_packet(void *data, size_t length)
 
     if (identifier == ID_S2C_TCP_CONNECT)
     {
-        if (reader.Read(client->resp_status) && reader.Read(client->bnd_addrtype))
+        if (reader.Read((char *)&client->resp_status, 1) && reader.Read((char *)&client->bnd_addrtype, 1))
         {
             switch (client->bnd_addrtype)
             {
             case SOCKS5_ADDRTYPE_IPV4:
             {
-                if (reader.Read(client->bnd_addr.v4.sin_addr) && reader.Read(client->bnd_addr.v4.sin_port))
+                if (reader.Read((char *)&client->bnd_addr.v4.sin_addr, 4) && reader.Read((char *)&client->bnd_addr.v4.sin_port, 2))
                 {
                 }
                 break;
             }
             case SOCKS5_ADDRTYPE_IPV6:
             {
-                if (reader.Read(client->bnd_addr.v6.sin6_addr) && reader.Read(client->bnd_addr.v6.sin6_port))
+                if (reader.Read((char *)&client->bnd_addr.v6.sin6_addr, 16) && reader.Read((char *)&client->bnd_addr.v6.sin6_port, 2))
                 {
                 }
                 break;
@@ -166,7 +158,7 @@ void Tunnel::connection_packet(void *data, size_t length)
             {
                 RakNet::RakString domain;
 
-                if (reader.Read(domain) && reader.Read(client->bnd_addr.domain.port))
+                if (reader.Read(domain) && reader.Read((char *)&client->bnd_addr.domain.port, 2))
                 {
                 }
 
@@ -192,27 +184,22 @@ void Tunnel::connection_packet(void *data, size_t length)
 
     if (identifier == ID_A2A_TCP_STREAM)
     {
-        int64_t sequence;
-        uint32_t crc;
-        reader.Read(sequence);
-        reader.Read(crc);
-        encrypted_data = reader.GetData() + BITS_TO_BYTES(reader.GetReadOffset());
-        encrypted_length = BITS_TO_BYTES(reader.GetNumberOfUnreadBits());
+        encrypted_data = (unsigned char *)&sheader[1];
+        encrypted_length = length - (sizeof(struct stream_header) + sizeof(struct packet_header));
 
         uint32_t crc2 = crc32(0, encrypted_data, encrypted_length);
 
-        printf("recv packet:%lu  sequence:%lu   size:%u   %08X  %08X\n", client->guid, sequence, encrypted_length, crc, crc2);
-        if (crc2 != crc)
+        if (crc2 != sheader->crc)
         {
-            printf("ffffffffffffffffff\n");
-            exit(EXIT_FAILURE);
+            printf("bad crc\n");
+            return;
         }
+
         socks5_tcp_sender::write(client, encrypted_data, encrypted_length);
     }
 
     if (identifier == ID_A2A_TCP_CLOSE)
     {
-        printf("ID_A2A_TCP_CLOSE %lu\n", guid);
         socks5_tcp_close::close(client);
     }
 }
@@ -235,10 +222,11 @@ void Tunnel::handle_packet(RakNet::Packet *p)
     case ID_NO_FREE_INCOMING_CONNECTIONS:
     case ID_INVALID_PASSWORD:
     case ID_CONNECTION_LOST:
+    case ID_ALREADY_CONNECTED:
         _stage = TUNNEL_STAGE_NOT_CONNECTED;
         printf("connect to server falled.\n");
         break;
-    case ID_ALREADY_CONNECTED:
+    
     case ID_CONNECTION_REQUEST_ACCEPTED:
         _stage = TUNNEL_STAGE_CONNECTED;
         // This tells the client they have connected
@@ -273,8 +261,8 @@ void Tunnel::send(socks5_client *client, RakNet::BitStream &packet, PacketReliab
     s20_crypt(password, S20_KEYLEN_256, nonce, 0, packet.GetData(), packet.GetNumberOfBytesUsed());
 
     encrypted_packet.Write((unsigned char)ID_USER_PACKET_ENUM);
-    encrypted_packet.Write((char*)nonce,8);
-    encrypted_packet.Write(packet);
+    encrypted_packet.WriteAlignedBytes((unsigned char *)nonce, 8);
+    encrypted_packet.WriteAlignedBytes(packet.GetData(), packet.GetNumberOfBytesUsed());
 
     char orderingChannel = client->guid % 32; //PacketPriority::NUMBER_OF_ORDERED_STREAMS
     rakPeer->Send(&encrypted_packet, priority, reliability, orderingChannel, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true);
@@ -303,26 +291,27 @@ void Tunnel::on_frame()
             socks5_client *client = _connecting_requests[i];
 
             RakNet::BitStream serializer;
-            serializer.Write((unsigned char)ID_C2S_TCP_CONNECT);
-            serializer.Write(client->guid);
-            serializer.Write((unsigned char)client->remote_addrtype);
+            unsigned char id = ID_C2S_TCP_CONNECT;
+            serializer.WriteAlignedBytes((unsigned char *)&id, 1);
+            serializer.WriteAlignedBytes((unsigned char *)&client->guid, 8);
+            serializer.WriteAlignedBytes((unsigned char *)&client->remote_addrtype, 1);
 
             if (client->remote_addrtype == SOCKS5_ADDRTYPE_IPV4)
             {
-                serializer.Write(client->remote_addr.v4.sin_addr);
-                serializer.Write(client->remote_addr.v4.sin_port);
+                serializer.WriteAlignedBytes((unsigned char *)&client->remote_addr.v4.sin_addr, 4);
+                serializer.WriteAlignedBytes((unsigned char *)&client->remote_addr.v4.sin_port, 2);
             }
 
             if (client->remote_addrtype == SOCKS5_ADDRTYPE_IPV6)
             {
-                serializer.Write(client->remote_addr.v6.sin6_addr);
-                serializer.Write(client->remote_addr.v6.sin6_port);
+                serializer.WriteAlignedBytes((unsigned char *)&client->remote_addr.v6.sin6_addr, 16);
+                serializer.WriteAlignedBytes((unsigned char *)&client->remote_addr.v6.sin6_port, 2);
             }
 
             if (client->remote_addrtype == SOCKS5_ADDRTYPE_DOMAIN)
             {
                 serializer.Write(client->remote_addr.domain.domain);
-                serializer.Write(client->remote_addr.domain.port);
+                serializer.WriteAlignedBytes((unsigned char *)&client->remote_addr.domain.port, 2);
             }
 
             send(client, serializer, RELIABLE, HIGH_PRIORITY);
@@ -369,22 +358,23 @@ void Tunnel::send_stream(socks5_client *client, void *data, size_t len)
     size_t totalsize = client->incoming_buffers.size();
 
     RakNet::BitStream serializer;
-    serializer.Write((unsigned char)ID_A2A_TCP_STREAM);
-    serializer.Write(client->guid);
-    serializer.Write(client->sequence);
+    unsigned char id = ID_A2A_TCP_STREAM;
+    serializer.WriteAlignedBytes((unsigned char *)&id, sizeof(id));
+    serializer.WriteAlignedBytes((unsigned char *)&client->guid, 8);
     uint32_t crc = crc32(0, data, len);
-    serializer.Write(crc);
-    serializer.Write((char *)data, len);
-    printf("send packet:%lu     %lu    len:%lu  crc32:%08x\n", client->guid, client->sequence, len, crc);
+    serializer.WriteAlignedBytes((unsigned char *)&crc, 4);
+    serializer.WriteAlignedBytes((unsigned char *)data, len);
 
     send(client, serializer);
-    client->sequence++;
+
 }
 void Tunnel::send_close(socks5_client *client)
 {
     RakNet::BitStream serializer;
-    serializer.Write((unsigned char)ID_A2A_TCP_CLOSE);
-    serializer.Write(client->guid);
+    unsigned char id = ID_A2A_TCP_CLOSE;
+
+    serializer.WriteAlignedBytes((unsigned char *)&id, sizeof(id));
+    serializer.WriteAlignedBytes((unsigned char *)&client->guid, 8);
 
     send(client, serializer);
 }
