@@ -280,6 +280,9 @@ void Tunnel::on_frame()
 
             client->stage = SOCKS5_CONN_STAGE_CONNECTING;
             client->resp_status = SOCKS5_RESPONSE_SERVER_FAILURE;
+			socks5_client::connect_event(client);
+
+			client->release();
         }
 
         _connecting_requests.clear();
@@ -324,13 +327,6 @@ void Tunnel::on_frame()
 
 void Tunnel::request_connect(socks5_client *client)
 {
-    if (_stage != TUNNEL_STAGE_CONNECTED)
-    {
-        client->stage = SOCKS5_CONN_STAGE_CONNECTING;
-        client->resp_status = SOCKS5_RESPONSE_SERVER_FAILURE;
-        return;
-    }
-
     client->addref();
     _connecting_requests.push_back(client);
 }
