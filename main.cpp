@@ -83,7 +83,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    tunnel.setup("45.32.167.96", 27015, "WDNMDNMSL");
+    tunnel.setup("127.0.0.1", 27015, "WDNMDNMSL");
     socks5.start("0.0.0.0", 1080);
     uv_timer_init(uv_default_loop(), &udp_timer);
     uv_timer_start(&udp_timer, udp_packet_update, 10, 10);
