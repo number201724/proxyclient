@@ -65,7 +65,9 @@ static void udp_packet_update(uv_timer_t *timer)
 
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
     rakPeer = RakNet::RakPeerInterface::GetInstance();
     rakPeer->SetTimeoutTime(10000, RakNet::UNASSIGNED_SYSTEM_ADDRESS);
     rakPeer->AllowConnectionResponseIPMigration(false);
@@ -81,7 +83,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    tunnel.setup("127.0.0.1", 27015, "WDNMDNMSL");
+    tunnel.setup("45.32.167.96", 27015, "WDNMDNMSL");
     socks5.start("0.0.0.0", 1080);
     uv_timer_init(uv_default_loop(), &udp_timer);
     uv_timer_start(&udp_timer, udp_packet_update, 10, 10);

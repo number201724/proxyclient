@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#ifndef _WIN32
 #include <alloca.h>
+#endif
 #include <assert.h>
 #include <uv.h>
 
@@ -12,7 +14,9 @@
 #include <list>
 #include <queue>
 #include <unordered_map>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <algorithm>
 #include <openssl/sha.h>
 

@@ -5,23 +5,30 @@
 #define SOCKS5_ALLOW_UDP (1 << 1)
 class socks5_server;
 
-class refernece_object
+class reference_object
 {
 public:
-    refernece_object()
+    reference_object()
     {
         _refcnt = 1;
     }
-    virtual ~refernece_object() {}
+    virtual ~reference_object() {}
     virtual int64_t addref()
     {
-        return __sync_add_and_fetch(&_refcnt, 1);
+#ifdef _WIN32
+		return InterlockedIncrement64(&_refcnt);
+#else
+		return __sync_add_and_fetch(&_refcnt, 1);
+#endif
     }
 
     virtual int64_t release()
     {
-        int64_t refcnt = __sync_sub_and_fetch(&_refcnt, 1);
-
+#ifdef _WIN32
+		int64_t refcnt = InterlockedDecrement64(&_refcnt);
+#else
+		int64_t refcnt = __sync_sub_and_fetch(&_refcnt, 1);
+#endif
         if (refcnt == 0)
         {
             delete this;
@@ -68,7 +75,7 @@ class socks5_tcp_close;
 class socks5_tcp_shutdown;
 class socks5_tcp_timeout;
 
-class socks5_client : public refernece_object
+class socks5_client : public reference_object
 {
 private:
     virtual ~socks5_client();
