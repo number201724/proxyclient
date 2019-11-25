@@ -1,1 +1,1 @@
-g++ -g -o proxyclient -Iraknet raknet/*.cpp *.cpp -lpthread -lcrypto -luv
+g++ -g -o proxyclient -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -Iraknet raknet/*.cpp *.cpp -lpthread -lcrypto -luv
