@@ -47,21 +47,12 @@ void socks5_tcp_close::close_cb(uv_handle_t *handle)
     delete close;
 }
 
-void socks5_tcp_close::close(socks5_client *client, bool forcemode)
+void socks5_tcp_close::close(socks5_client *client, bool doclose)
 {
-    bool run_close=false;
-    if(forcemode)
-    {
-        run_close=true;
-    }
-    else
-    {
-	
-    	if (client->stage < SOCKS5_CONN_STAGE_CLOSING)
-		run_close=true;
-    }
+    if (client->stage < SOCKS5_CONN_STAGE_CLOSING)
+        doclose=true;
 
-    if(run_close)
+    if(doclose)
     {
         if (!client->remote_close)
         {

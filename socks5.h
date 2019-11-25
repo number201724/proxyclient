@@ -135,7 +135,7 @@ public:
     socks5_tcp_close(socks5_client *_client);
     ~socks5_tcp_close();
     static void close_cb(uv_handle_t *handle);
-    static void close(socks5_client *client, bool forcemode = false);
+    static void close(socks5_client *client, bool doclose= false);
     socks5_client *client;
 };
 
